@@ -3,7 +3,9 @@ enedis data: https://data.enedis.fr/explore/?sort=modified&refine.territoire=Adr
 Données Velib : 
 https://opendata.paris.fr/api/explore/v2.1/catalog/datasets/velib-disponibilite-en-temps-reel/ 
 . Le dataset Vélib’ permet de suivre en temps réel l’activité des vélos en libre-service à Paris. Il sert à analyser la fréquentation des quartiers, comprendre l’impact de la mobilité douce sur la consommation électrique et la pollution, optimiser la gestion des stations (répartition, maintenance), enrichir des modèles de prévision énergétique ou environnementale, créer des dashboards interactifs pour la ville, et promouvoir des solutions de transport écologiques.
- 
+
+
+Données meteorologiques : https://meteo.data.gouv.fr/datasets/6569b27598256cc583c917a7
 
 
 
@@ -11,7 +13,12 @@ https://opendata.paris.fr/api/explore/v2.1/catalog/datasets/velib-disponibilite-
 
 
 
+<<<<<<< HEAD
  Api TEST
 
 
  
+=======
+
+ Api TEST
+>>>>>>> 73013dafa2bc4ced3bbb6dadb718cb471472af3f
