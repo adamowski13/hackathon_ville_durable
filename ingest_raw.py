@@ -1,85 +1,132 @@
 #!/usr/bin/env python3
 """
-ingest_enedis_catalog.py
--------------------------------------------------------------
-Télécharge le catalogue Enedis (liste des datasets) et l'envoie
-dans le bucket 'raw' de MinIO (ou S3 compatible).
--------------------------------------------------------------
+ingest_enedis_multi.py
+
+Télécharge plusieurs datasets Enedis / électrique / infrastructure (CSV ou GeoJSON),
+et les envoie dans le bucket RAW défini dans S3_creation.py, en streaming lorsqu’applicable.
+
+Chaque source est configurée avec :
+- une clé “name”
+- une URL
+- un type (csv / geojson)
+- un flag “streamable” (True si on peut streamer, sinon on télécharge completement)
+
+Le script gère l’upload idempotent (skip si déjà existant).
 """
 
-import os
-import json
-from datetime import datetime
-from botocore.client import Config
-import boto3
-import requests
 import logging
+import requests
+from datetime import datetime
+from botocore.exceptions import ClientError
+from S3_creation import s3, RAW_BUCKET
 
-# ==========================================================
-# CONFIGURATION MINIO
-# ==========================================================
-S3_ENDPOINT   = os.getenv("S3_ENDPOINT", "http://localhost:9000")
-S3_KEY        = os.getenv("S3_KEY", "minioadmin")
-S3_SECRET     = os.getenv("S3_SECRET", "minioadmin")
-RAW_BUCKET    = os.getenv("RAW_BUCKET", "raw")
+# ----------------------------------------------------------------------
+# Config des sources à ingérer
+# ----------------------------------------------------------------------
+SOURCES = [
+    {
+        "name": "enedis_residentiel",
+        "url": (
+            "https://data.enedis.fr/api/explore/v2.1/catalog/datasets/"
+            "consommation-annuelle-residentielle-par-adresse/exports/csv"
+            "?lang=fr&timezone=Europe%2FBerlin&use_labels=true&delimiter=%3B"
+        ),
+        "type": "csv",
+        "streamable": True
+    },
+    {
+        "name": "poteaux_hta_bt",
+        "url": "https://data.enedis.fr/explore/dataset/position-geographique-des-poteaux-hta-et-bt/export/?format=csv",
+        "type": "csv",
+        "streamable": True
+    },
+    {
+        "name": "reseau_souterrain_hta",
+        "url": "https://data.enedis.fr/explore/dataset/reseau-souterrain-hta/export/?format=csv",
+        "type": "csv",
+        "streamable": True
+    },
+    {
+        "name": "production_par_commune",
+        "url": "https://data.enedis.fr/explore/dataset/production-electrique-par-filiere-a-la-maille-commune/export/?format=csv",
+        "type": "csv",
+        "streamable": True
+    },
+    {
+        "name": "coefficients_profils",
+        "url": "https://data.enedis.fr/explore/dataset/coefficients-des-profils/export/?format=csv",
+        "type": "csv",
+        "streamable": True
+    },
+]
 
-s3 = boto3.client(
-    "s3",
-    endpoint_url=S3_ENDPOINT,
-    aws_access_key_id=S3_KEY,
-    aws_secret_access_key=S3_SECRET,
-    config=Config(signature_version="s3v4"),
-    region_name="us-east-1"
-)
+# ----------------------------------------------------------------------
+# Utils S3 / idempotence
+# ----------------------------------------------------------------------
+def setup_logging(level="INFO"):
+    logging.basicConfig(
+        level=getattr(logging, level),
+        format="%(asctime)s %(levelname)s %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S"
+    )
 
-# ==========================================================
-# LOGGING
-# ==========================================================
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
-)
+def object_exists(key):
+    try:
+        s3.head_object(Bucket=RAW_BUCKET, Key=key)
+        return True
+    except ClientError as e:
+        if e.response['Error']['Code'] == '404':
+            return False
+        raise
 
-# ==========================================================
-# INGESTION API ENEDIS
-# ==========================================================
-def ingest_enedis_catalog():
-    url = "https://data.enedis.fr/api/explore/v2.1/catalog/datasets/"
-    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-    key = f"enedis_catalog/date={datetime.utcnow().strftime('%Y/%m/%d')}/enedis_catalog_{ts}.json"
+# ----------------------------------------------------------------------
+# Fonction d’ingestion pour une source
+# ----------------------------------------------------------------------
+def ingest_source(src):
+    ts = datetime.utcnow()
+    name = src["name"]
+    url = src["url"]
+    typ = src.get("type", "csv")
+    streamable = src.get("streamable", False)
+
+    ext = ".csv" if typ == "csv" else ".geojson"
+    key = ts.strftime(f"api/{name}/date=%Y/%m/%d/{name}_%Y%m%dT%H%M%SZ{ext}")
+
+    if object_exists(key):
+        logging.info("Skipped existing %s → s3://%s/%s", name, RAW_BUCKET, key)
+        return
 
     try:
-        # Vérifie et crée le bucket si besoin
-        existing = {b['Name'] for b in s3.list_buckets().get('Buckets', [])}
-        if RAW_BUCKET not in existing:
-            s3.create_bucket(Bucket=RAW_BUCKET)
-            logging.info(f"🪣 Bucket créé : {RAW_BUCKET}")
+        logging.info("Téléchargement de %s depuis %s", name, url)
+        if streamable:
+            with requests.get(url, stream=True, timeout=600) as r:
+                r.raise_for_status()
+                # flux direct vers S3
+                s3.upload_fileobj(r.raw, RAW_BUCKET, key)
+            logging.info("%s upload terminé en streaming → s3://%s/%s", name, RAW_BUCKET, key)
         else:
-            logging.info(f"🪣 Bucket déjà existant : {RAW_BUCKET}")
-
-        # Appel API
-        logging.info(f"🌐 Téléchargement du catalogue Enedis : {url}")
-        resp = requests.get(url, timeout=30)
-        resp.raise_for_status()
-
-        # Upload brut JSON
-        data_bytes = json.dumps(resp.json(), indent=2).encode("utf-8")
-        s3.put_object(
-            Bucket=RAW_BUCKET,
-            Key=key,
-            Body=data_bytes,
-            ContentType="application/json"
-        )
-        logging.info(f"✅ Upload réussi → s3://{RAW_BUCKET}/{key} ({len(data_bytes)} octets)")
-
+            resp = requests.get(url, timeout=300)
+            resp.raise_for_status()
+            s3.put_object(Bucket=RAW_BUCKET, Key=key, Body=resp.content, ContentType="text/csv")
+            logging.info("%s upload terminé (non-stream) → s3://%s/%s", name, RAW_BUCKET, key)
     except Exception as e:
-        logging.error(f"❌ Erreur ingestion Enedis catalog : {e}")
+        logging.error("Échec ingestion %s : %s", name, e)
 
-# ==========================================================
-# MAIN
-# ==========================================================
+# ----------------------------------------------------------------------
+# Main
+# ----------------------------------------------------------------------
+def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--log', default='INFO')
+    args = parser.parse_args()
+
+    setup_logging(args.log)
+    logging.info("Démarrage de l’ingestion multiple Enedis")
+
+    for src in SOURCES:
+        ingest_source(src)
+    logging.info("Ingestion multiple terminée")
+
 if __name__ == "__main__":
-    logging.info("🚀 Ingestion du catalogue Enedis → bucket raw")
-    ingest_enedis_catalog()
-    logging.info("🏁 Terminé.")
+    main()
