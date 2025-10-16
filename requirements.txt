@@ -1,0 +1,11 @@
+pandas
+numpy
+matplotlib
+plotly
+scikit-learn
+python-dotenv
+minio
+requests
+
+streamlit
+joblib
