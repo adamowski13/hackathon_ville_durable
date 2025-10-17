@@ -1,3 +1,106 @@
+<<<<<<< HEAD
+import streamlit as st
+import pandas as pd
+import numpy as np
+import requests
+import joblib
+import plotly.express as px
+import plotly.graph_objects as go
+
+st.set_page_config(page_title="Prévisions Électricité IDF", layout="wide")
+
+# --- Charger le modèle ---
+model = joblib.load("random_forest_meteo_only.pkl")
+
+# --- Sidebar ---
+st.sidebar.header("Paramètres")
+city = st.sidebar.text_input("Ville", "Paris")
+days = st.sidebar.slider("Nombre de jours de prévision", 1, 7, 7)
+
+# --- Récupérer les données météo ---
+API_KEY = "ad835a8d9bf14e938e0204738251610"
+
+def get_weather(city, days=7):
+    url = f"http://api.weatherapi.com/v1/forecast.json?key={API_KEY}&q={city}&days={days}&aqi=no&alerts=no"
+    response = requests.get(url)
+    data = response.json()
+    
+    forecast = []
+    for day in data['forecast']['forecastday']:
+        forecast.append({
+            "date": day["date"],
+            "Pluie_mm": day["day"]["totalprecip_mm"],
+            "Tn_Min": day["day"]["mintemp_c"],
+            "Tx_Max": day["day"]["maxtemp_c"],
+            "T_Moyenne": day["day"]["avgtemp_c"],
+            "Vent_Moyen": day["day"]["maxwind_kph"],  # ou avg si dispo
+            "Vent_Max": day["day"]["maxwind_kph"]
+        })
+    return pd.DataFrame(forecast)
+
+weather_df = get_weather(city, days)
+
+st.subheader(f"Prévisions météo pour {city} ({days} jours)")
+st.dataframe(weather_df)
+
+# --- Préparation pour le modèle ---
+weather_df["date"] = pd.to_datetime(weather_df["date"])
+weather_df["annee"] = weather_df["date"].dt.year
+weather_df["mois"] = weather_df["date"].dt.month
+weather_df["jour"] = weather_df["date"].dt.day
+weather_df["jour_semaine"] = weather_df["date"].dt.weekday
+
+# Supprimer les lags (pas disponibles)
+X_pred = weather_df.drop(columns=["date"])
+
+# --- Prédictions ---
+y_pred = model.predict(X_pred)
+weather_df["elec_MW_pred"] = y_pred
+
+# --- Graphiques interactifs ---
+st.subheader("Prévision de consommation électrique (interactive)")
+
+# 1️⃣ Courbe consommation
+fig1 = px.line(weather_df, x="date", y="elec_MW_pred", markers=True,
+               title="Prévision consommation électrique",
+               labels={"elec_MW_pred": "Électricité (MW)", "date": "Date"})
+st.plotly_chart(fig1, use_container_width=True)
+
+# 2️⃣ Graphique combiné météo vs consommation
+st.subheader("Météo vs consommation prévue")
+fig2 = go.Figure()
+fig2.add_trace(go.Scatter(x=weather_df["date"], y=weather_df["elec_MW_pred"],
+                          mode='lines+markers', name="Élec MW", line=dict(color='firebrick')))
+fig2.add_trace(go.Bar(x=weather_df["date"], y=weather_df["T_Moyenne"],
+                      name="Température moyenne", marker_color='skyblue', opacity=0.5, yaxis='y2'))
+
+fig2.update_layout(
+    title="Consommation électrique vs Pluie",
+    xaxis_title="Date",
+    yaxis=dict(title="Élec MW"),
+    yaxis2=dict(title="Pluie mm", overlaying='y', side='right'),
+    legend=dict(x=0.02, y=0.98)
+)
+st.plotly_chart(fig2, use_container_width=True)
+
+# 3️⃣ Heatmap températures
+st.subheader("Température (min/max/moy) sur la semaine")
+temp_df = weather_df.melt(id_vars="date", value_vars=["Tn_Min","Tx_Max","T_Moyenne"],
+                          var_name="Type", value_name="Température °C")
+fig3 = px.imshow(temp_df.pivot(index="Type", columns="date", values="Température °C"),
+                 text_auto=True, aspect="auto", color_continuous_scale="RdYlBu_r")
+st.plotly_chart(fig3, use_container_width=True)
+
+# --- Statistiques rapides ---
+st.subheader("Statistiques sur la semaine")
+st.write(f"Consommation moyenne : {weather_df['elec_MW_pred'].mean():.2f} MW")
+st.write(f"Consommation max : {weather_df['elec_MW_pred'].max():.2f} MW")
+st.write(f"Consommation min : {weather_df['elec_MW_pred'].min():.2f} MW")
+st.write(f"Pluie totale : {weather_df['Pluie_mm'].sum():.2f} mm")
+st.write(f"Température moyenne : {weather_df['T_Moyenne'].mean():.2f} °C")
+st.write(f"Température max : {weather_df['Tx_Max'].max():.2f} °C")
+st.write(f"Température min : {weather_df['Tn_Min'].min():.2f} °C")
+=======
 
 import os, io
 import pandas as pd
@@ -145,3 +248,4 @@ if model is not None:
         st.warning(f"⚠️ {nb_peaks} intervalles dépassent le seuil de {peak_threshold:.0f} MW.")
     else:
         st.success("Aucun dépassement de seuil prévu sur l'horizon sélectionné.")
+>>>>>>> 7ce8ab9a9d62ff7ce96176a26f292715a4de2a7b
